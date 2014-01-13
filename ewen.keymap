@@ -1,0 +1,20 @@
+{:+ {:editor {;;Eval the parent ( ... )
+                               "alt-enter" [(:paredit.select.parent "(")
+                                            :eval-editor-form
+                                            :paredit.select.clear]
+
+                               ;;Select the parent expression, whether that's [], {}, or ()
+                               "shift-alt-s" [:paredit.select.form-at-point]
+
+                               ;;Format the parent ()
+                               "alt-s" [(:paredit.select.parent "(")
+                                        :smart-indent-selection
+                                        :paredit.select.clear]
+
+                               ;;Slurp and Barf, with less ridiculous and more intuitive names
+                               "pmeta-right" [:paredit.grow.right]
+                               "pmeta-left" [:paredit.shrink.right]
+
+                                        ;Go to start/end of line
+                               "ctrl-a" [:editor.line-start]
+                               "ctrl-e" [:editor.line-end]}}}

@@ -1,0 +1,5 @@
+{:name "Ewen"
+ :author "Ewen"
+ :source ""
+ :desc "My conf for Light Table"
+ :behaviors "ewen.behaviors"}
