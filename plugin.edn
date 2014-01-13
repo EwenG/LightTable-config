@@ -1,5 +1,5 @@
 {:name "Ewen"
  :author "Ewen"
- :source ""
+ :source "https://github.com/EwenG/LightTable-config"
  :desc "My conf for Light Table"
  :behaviors "ewen.behaviors"}
