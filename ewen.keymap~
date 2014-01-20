@@ -1,10 +1,10 @@
-{:+ {:editor {;;Eval the parent ( ... )
+{:+ {:editor.keys.normal.ewen {;;Eval the parent ( ... )
                                "alt-enter" [(:paredit.select.parent "(")
                                             :eval-editor-form
                                             :paredit.select.clear]
 
                                ;;Select the parent expression, whether that's [], {}, or ()
-                               "alt-p" [:paredit.select.form-at-point]
+                               "shift-alt-s" [:paredit.select.form-at-point]
 
                                ;;Format the parent ()
                                "alt-s" [(:paredit.select.parent "(")
