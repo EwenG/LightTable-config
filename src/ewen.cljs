@@ -7,8 +7,11 @@
             [lt.objs.tabs :as tabs]
             [lt.objs.context :as ctx]
             [lt.plugins.paredit :as paredit]
-            [amalloy.ring-buffer :refer [ring-buffer]])
-  (:require-macros [lt.macros :refer [behavior]]))
+            [amalloy.ring-buffer :refer [ring-buffer]]
+            [cljs.core.match :as core.match])
+  (:require-macros [lt.macros :refer [behavior]]
+                   [cljs.core.match.macros :refer [match]]))
+
 
 
 
@@ -169,8 +172,16 @@
                     :to end}))
     orig)))
 
+
 (defn select-at-point [ed]
-  (select-matching-brackets ed false))
+  (let [[at-point after] [(editor/get-char ed 0) (editor/get-char ed 1)]]
+    (match [at-point after]
+           [")" _] 1
+           :else [at-point after])
+    #_(select-matching-brackets ed false)))
+
+  (select-at-point (pool/last-active))
+
 
 (cmd/command {:command :ewen.paredit.select.at-point
               :desc "Ewen-Paredit: Select at point"
@@ -287,3 +298,4 @@
 
 
 )
+
