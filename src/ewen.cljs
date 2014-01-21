@@ -154,45 +154,92 @@
 (js/ewen.lt.findMatchingBracket (:ed @(pool/last-active)) (-> @(pool/last-active) :ed (.getCursor)) true)
 
 
-(defn matching-brackets-pos [match]
-  [{:line (-> match (.-from) (.-line)) :ch (-> match (.-from) (.-ch))}
-   {:line (-> match (.-to) (.-line)) :ch (-> match (.-to) (.-ch))}])
-
-(defn select-matching-brackets [{:keys [ed loc] :as orig} forward]
-  (let [matching-brackets (js/ewen.lt.findMatchingBracket (:ed @ed) (.getCursor (:ed @ed)) true)]
-    (if (and (not (nil? matching-brackets))
-             (= forward (.-forward matching-brackets)))
-      (let [[start end] (matching-brackets-pos matching-brackets)
-            [start end] (if forward
-                          [start (editor/adjust-loc end 1)]
-                          [(editor/adjust-loc start 1) end])]
-        (update-in orig [:edits] conj
-                   {:type :cursor
-                    :from start
-                    :to end}))
-    orig)))
 
 
-(defn select-at-point [ed]
-  (let [[at-point after] [(editor/get-char ed 0) (editor/get-char ed 1)]]
-    (match [at-point after]
-           [")" _] 1
-           :else [at-point after])
-    #_(select-matching-brackets ed false)))
-
-  (select-at-point (pool/last-active))
+  (do (def ed
+        "The current editor object"
+        (pool/last-active)) nil)
+  (def cm
+    "The CodeMirror JS object"
+    (:ed @ed))
 
 
-(cmd/command {:command :ewen.paredit.select.at-point
-              :desc "Ewen-Paredit: Select at point"
-              :exec (fn []
-                      (when-let [ed (pool/last-active)]
-                        (when (or (not (::orig-pos @ed))
-                                  (editor/selection? ed))
-                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
-                        (-> (paredit/ed->info ed)
-                            select-at-point
-                            (paredit/batched-edits))))})
+  (defn matching-brackets->pos
+    "Convert a JS object corresponding to the positions of matching brackets
+    into a Lighttable position"
+    [match]
+    [{:line (-> match (.-from) (.-line)) :ch (-> match (.-from) (.-ch))}
+     {:line (-> match (.-to) (.-line)) :ch (-> match (.-to) (.-ch))}])
+
+  (-> (js-obj "from" (js/CodeMirror.Pos. 176 20)
+              "to" (js/CodeMirror.Pos. 165 2)
+              "match" true
+              "forward" false)
+      matching-brackets->pos)
+
+
+  (defn matching-brackets
+    "Return the positions of a pair of matching brackets.
+    The buffer used is determined by `cm`.
+    The starting bracket is at position `cursor` and its matching bracket is searched forward
+    if `forward` is true and backward otherwise."
+    [cm cursor forward]
+    ;Find matching brackets using the Codemirror object `cm`, starting at the cursor position `cursor` and using strict mode.
+    (let [matching-brackets (js/ewen.lt.findMatchingBracket cm cursor true)]
+      (if (and (not (nil? matching-brackets))
+               (= forward (.-forward matching-brackets)))
+        (let [[start end] (matching-brackets-pos matching-brackets)
+              [start end] (if forward
+                            [start (editor/adjust-loc end 1)]
+                            [(editor/adjust-loc start 1) end])]
+          [start end])
+        nil)))
+
+  (matching-brackets cm (js/CodeMirror.Pos. 191 14) false)
+  (matching-brackets cm (editor/->cursor ed) false)
+
+
+  (defn select
+    "Return the action to be executed in order to select the positions
+    of an editor from start to end."
+    [[start end]]
+    (if (or (nil? start) (nil? end))
+      [] ;Nothing to be selected. No action
+      [{:type :cursor
+        :from start
+        :to end}]))
+
+  (select [{:line 191 :ch 14} {:line 177 ch :2}])
+
+
+  (defn select-at-point [{:keys [ed loc] :as orig}]
+    (let [[at-point after] [(editor/get-char ed -1) (editor/get-char ed 0)]
+          _ (prn [at-point after])
+          action (match [at-point after]
+                 [")" _] (->> (matching-brackets cm (editor/cursor ed) false) select)
+                 ["]" _] (->> (matching-brackets cm (editor/cursor ed) false) select)
+                 ["}" _] (->> (matching-brackets cm (editor/cursor ed) false) select)
+                 :else [])]
+      action))
+
+  )
+  (-> (paredit/ed->info ed) select-at-point)
+  (.log js/console (editor/cursor ed))
+(comment
+
+  (.log js/console (paredit/ed->info ed))
+  (editor/->cursor ed)
+
+  (cmd/command {:command :ewen.paredit.select.at-point
+                :desc "Ewen-Paredit: Select at point"
+                :exec (fn []
+                        (when-let [ed (pool/last-active)]
+                          (when (or (not (::orig-pos @ed))
+                                    (editor/selection? ed))
+                            (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                          (-> (paredit/ed->info ed)
+                              select-at-point
+                              (paredit/batched-edits))))})
 
 (defn scan [{:keys [dir ed loc regex match-length] :as opts}]
   (let [search-range [(- (:line loc) 100) (+ (:line loc) 100)]
