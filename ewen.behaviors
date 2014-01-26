@@ -1,3 +1,3 @@
 {:+ {:app [(:lt.objs.plugins/load-keymap "ewen.keymap")
-    	   (:lt.objs.plugins/load-js "recall.js")
+           (:lt.objs.plugins/load-js "recall.js")
            (:lt.objs.plugins/load-js "ewen_compiled.js")]}}

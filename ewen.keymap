@@ -7,7 +7,7 @@
               "alt-p" [:paredit.select.form-at-point]
 
               ;;Format the parent ()
-              "alt-s" [(:paredit.select.parent "(")
+              "alt-q" [(:paredit.select.parent "(")
                        :smart-indent-selection
                        :paredit.select.clear]
 
@@ -18,4 +18,5 @@
               ;Go to start/end of line
               "ctrl-a" [:editor.line-start]
               "ctrl-e" [:editor.line-end]}}
- :editor.cljs {"ctrl-enter" [:ewen.eval-at-point]}}
+ :editor.cljs {"ctrl-enter" [:ewen.eval-at-point]
+               "ctrl-alt-space" [:ewen.select-next]}}

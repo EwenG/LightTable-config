@@ -11,7 +11,6 @@
             [cljs.core.match :as core.match])
   (:require-macros [lt.macros :refer [behavior]]
                    [cljs.core.match.macros :refer [match]]))
-df
 
 (defn paired-scan [{:keys [dir ed loc for negation allow-end? allow-strings? only-for? for-length] :as opts}]
     (let [[stack-chars stack-ends] (if (= dir :left)
@@ -74,7 +73,6 @@ df
                             (paredit/batched-edits))))
 
 
-
   (defn move-loc [ed dir]
     (-> ed (paredit/move-loc (:loc (paredit/ed->info ed)) dir)))
 
@@ -85,30 +83,35 @@ df
                 :to (editor/adjust-loc end 1)}))
 
 
-  (defn get-char [ed loc]
-      (editor/range ed (editor/adjust-loc loc -1) loc))
+  (defn get-char
+    ([ed loc]
+     (editor/range ed (editor/adjust-loc loc -1) loc))
+    ([ed loc dir]
+     (if (> dir 0)
+       (editor/range ed loc (editor/adjust-loc loc dir))
+       (editor/range ed (editor/adjust-loc loc dir) loc))))
+
 
   (defn word-boundary [ed loc]
     (let [[c start] (paired-scan
                      {:dir :left
                       :ed ed
-                      :allow-end? true
-                      :loc (paredit/move-loc ed (editor/->cursor ed) :left)
+                      :allow-end? false
+                      :loc (paredit/move-loc ed loc :left)
                       :for #"[\s\)\}\]\"\(\{\[(#_)]"
                       :for-length 2})
-          start (paredit/move-loc ed start :right)
+          start (if start (paredit/move-loc ed start :right) nil)
           [c end] (if-not c
                     [nil nil]
                     (paired-scan {:dir :right
                                   :ed ed
                                   :allow-end? false
                                   :loc start
-                                  :for #"[\s\)\}\]\"\(\{\[]"}))]
-      [start (paredit/move-loc ed end :left)]))
+                                  :for #"[\s\)\}\]\"\(\{\[]"}))
+          end (if end (paredit/move-loc ed end :left) nil)
+          end (if (and end (> (:line end) (:line start))) (paredit/move-loc ed end :left) end)]
+      (if (and start end) [start end] nil)))
 
-  (cmd/command {:command :ewen.test-bounds
-                :desc "test bounds"
-                :exec #(prn (word-boundary (pool/last-active) (editor/->cursor (pool/last-active))))})
 
   (defn select-at-point [ed]
     (let [[at-point after] [(editor/get-char ed -1) (editor/get-char ed 1)]
@@ -127,33 +130,138 @@ df
                             [_ "]"] (word-boundary ed left-loc)
                             [_ "}"] (word-boundary ed left-loc)
                             :else nil)
-          selection (if boundaries
+          selection (if (first boundaries)
                       (select ed-info boundaries)
                       ed-info)]
-      (paredit/batched-edits selection)))
+      (when selection (paredit/batched-edits selection))))
 
-  (defn eval-at-point [ed]
-    (when (or (not (::orig-pos @ed))
-              (editor/selection? ed))
-      (object/merge! ed {::orig-pos (editor/->cursor ed)}))
-    (when (not (editor/selection? ed))
-      (select-at-point ed))
-    (when ed
-      (object/raise ed :eval)
-      (cmd/exec! :editor.selection.clear))
-    (when (::orig-pos @ed)
-      (editor/move-cursor ed (::orig-pos @ed))
-      (object/merge! ed {::orig-pos nil})))
+
+  (defn normalize-boundary [{:keys [from to]}]
+    [from to])
+
+  (defn min-loc [{l1 :line ch1 :ch :as loc1} {l2 :line ch2 :ch :as loc2}]
+    (cond (nil? loc1) loc2
+          (nil? loc2) loc1
+          (< l1 l2) loc1
+          (< l2 l1) loc2
+          (< ch1 ch2) loc1
+          (<= ch2 ch1) loc2))
+
+  (defn max-loc [{l1 :line ch1 :ch :as loc1} {l2 :line ch2 :ch :as loc2}]
+    (cond (nil? loc1) loc2
+          (nil? loc2) loc1
+          (< l1 l2) loc2
+          (< l2 l1) loc1
+          (< ch1 ch2) loc2
+          (<= ch2 ch1) loc1))
+
+  (defn merge-boundaries
+    ([[start1 end1] [start2 end2]]
+     (let [[start end] [(min-loc start1 start2) (max-loc end1 end2)]]
+       (if (and start end) [start end] nil)))
+    ([b1 b2 & boundaries]
+     (reduce merge-boundaries (merge-boundaries b1 b2) boundaries)))
+
+   (defn select-next [ed]
+     (let [loc (editor/->cursor ed)
+           ed-info (paredit/ed->info ed)
+           select-boundaries (when (editor/selection? ed)
+                               (-> (editor/selection-bounds ed)
+                                   normalize-boundary))
+           whitespaces-boundaries [loc (-> (paredit/first-non-whitespace
+                                            {:ed ed
+                                             :loc loc
+                                             :dir :right})
+                                           second)]
+           right-loc (-> whitespaces-boundaries
+                         second
+                         (editor/adjust-loc 1))
+           [bbefore before after aafter] [(get-char ed (second whitespaces-boundaries) -2)
+                                          (get-char ed (second whitespaces-boundaries) -1)
+                                          (get-char ed (second whitespaces-boundaries) 1)
+                                          (get-char ed (second whitespaces-boundaries) 2)]
+           boundaries (match [bbefore before after aafter]
+                                   [_ _ "(" _] (paredit/form-boundary ed right-loc nil)
+                                   [_ _ "[" _] (paredit/form-boundary ed right-loc nil)
+                                   [_ _ "{" _] (paredit/form-boundary ed right-loc nil)
+                                   [_ _ _ "#_"] [(second whitespaces-boundaries) right-loc]
+                                   [_ _ "" _] nil
+                                   [_ _ " " _] nil
+                                   [_ "(" _ _] (word-boundary ed right-loc)
+                                   [_ "[" _ _] (word-boundary ed right-loc)
+                                   [_ "{" _ _] (word-boundary ed right-loc)
+                                   ["#_" _ _ _] (word-boundary ed right-loc)
+                                   [_ "" _ _] (word-boundary ed right-loc)
+                                   [_ " " _ _] (word-boundary ed right-loc)
+                                   :else nil)
+           merged-boundaries (merge-boundaries select-boundaries whitespaces-boundaries boundaries)
+           selection (if merged-boundaries
+                       (select ed-info merged-boundaries)
+                       ed-info)]
+       (when selection (paredit/batched-edits selection))))
+
+   (defn move-forward [ed]
+     (let [loc (editor/->cursor ed)
+           ed-info (paredit/ed->info ed)
+           whitespaces-boundaries [loc (-> (paredit/first-non-whitespace
+                                            {:ed ed
+                                             :loc loc
+                                             :dir :right})
+                                           second)]
+           right-loc (-> whitespaces-boundaries
+                         second
+                         (editor/adjust-loc 1))
+           [bbefore before after aafter] [(get-char ed (second whitespaces-boundaries) -2)
+                                          (get-char ed (second whitespaces-boundaries) -1)
+                                          (get-char ed (second whitespaces-boundaries) 1)
+                                          (get-char ed (second whitespaces-boundaries) 2)]
+           boundaries (match [bbefore before after aafter]
+                             [_ _ "(" _] (paredit/form-boundary ed right-loc nil)
+                             [_ _ "[" _] (paredit/form-boundary ed right-loc nil)
+                             [_ _ "{" _] (paredit/form-boundary ed right-loc nil)
+                             [_ _ _ "#_"] [(second whitespaces-boundaries) right-loc]
+                             [_ _ "" _] nil
+                             [_ _ " " _] nil
+                             [_ "(" _ _] (word-boundary ed right-loc)
+                             [_ "[" _ _] (word-boundary ed right-loc)
+                             [_ "{" _ _] (word-boundary ed right-loc)
+                             ["#_" _ _ _] (word-boundary ed right-loc)
+                             [_ "" _ _] (word-boundary ed right-loc)
+                             [_ " " _ _] (word-boundary ed right-loc)
+                             :else nil)
+           merged-boundaries (merge-boundaries whitespaces-boundaries boundaries)
+           selection (if merged-boundaries
+                       (select ed-info merged-boundaries)
+                       ed-info)]
+       (when selection (paredit/batched-edits selection))))
+
+   (defn eval-at-point [ed]
+     (when (or (not (::orig-pos @ed))
+               (editor/selection? ed))
+       (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+     (when (not (editor/selection? ed))
+       (select-at-point ed))
+     (when ed
+       (object/raise ed :eval.one)
+       (cmd/exec! :editor.selection.clear))
+     (when (::orig-pos @ed)
+       (editor/move-cursor ed (::orig-pos @ed))
+       (object/merge! ed {::orig-pos nil})))
+
+
 
 
   (cmd/command {:command :ewen.select-at-point
               :desc "select at point"
               :exec #(select-at-point (pool/last-active))})
 
+  (cmd/command {:command :ewen.select-next
+              :desc "select next"
+              :exec #(select-next (pool/last-active))})
+
   (cmd/command {:command :ewen.eval-at-point
               :desc "eval at point"
               :exec #(eval-at-point (pool/last-active))})
-
 
 
 
@@ -168,7 +276,17 @@ df
   only-for? -> I think, same thing than \"strict mode\" when matching brackets, ie: a paren cannot end a braces for example.")
 
 
+(cmd/command {:command :ewen.test-scan
+                :desc "test scan"
+                :exec #(prn (paired-scan {:dir :right
+                                  :ed (pool/last-active)
+                                  :allow-end? false
+                                  :loc (editor/->cursor (pool/last-active))
+                                  :for #"[\s\)\}\]\"\(\{\[]"}))})
 
+(cmd/command {:command :ewen.test-bounds
+                :desc "test bounds"
+                :exec #(prn (word-boundary (pool/last-active) (editor/->cursor (pool/last-active))))})
 
 
   (cmd/command {:command :test-scan
