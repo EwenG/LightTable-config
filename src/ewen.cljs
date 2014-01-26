@@ -11,37 +11,176 @@
             [cljs.core.match :as core.match])
   (:require-macros [lt.macros :refer [behavior]]
                    [cljs.core.match.macros :refer [match]]))
+df
+
+(defn paired-scan [{:keys [dir ed loc for negation allow-end? allow-strings? only-for? for-length] :as opts}]
+    (let [[stack-chars stack-ends] (if (= dir :left)
+                                     [paredit/form-end paredit/form-start]
+                                     [paredit/form-start paredit/form-end])
+          final-loc (paredit/end-loc ed)
+          search-range [(- (:line loc) 100) (+ (:line loc) 100)]
+          for-length (if for-length for-length 1)]
+      (loop [cur loc
+             line (editor/line ed (:line loc))
+             stack []
+             ch-stack (ring-buffer for-length)]
+        (if (or (not cur)
+                (not line)
+                (not (paredit/within-range search-range cur)))
+          nil
+          (let [ch (get line (:ch cur))
+                ch-stack (conj ch-stack ch)
+                ch-str (reduce str ch-stack)
+                next-loc (paredit/move-loc ed cur dir)
+                next-line (if (not= (:line cur) (:line next-loc))
+                            (editor/line ed (:line next-loc))
+                            line)
+                valid? (not (paredit/string|comment? ed cur allow-strings?))
+                stackable? (not (paredit/string|comment? ed cur))]
+            (cond
+             (and allow-end?
+                  valid?
+                  (or (= final-loc cur)
+                      (not= next-line line))) (if (= dir :right)
+                                              [ch (editor/adjust-loc cur 1)]
+                                              [ch {:line (:line cur) :ch -1}])
+             (and ch
+                  (re-seq for ch-str)
+                  valid?
+                  (not (seq stack))
+                  (if negation
+                    (negation line cur)
+                    true)) [ch cur]
+
+             (and ch
+                  (not only-for?)
+                  paredit/stackable?
+                  (re-seq stack-ends ch-str)
+                  (not= ch (-> stack last paredit/opposites))) nil
+
+             :else (recur next-loc next-line (cond
+                                              (and ch paredit/stackable? (re-seq stack-chars ch)) (conj stack ch)
+                                              (and ch paredit/stackable? (= ch (-> stack last paredit/opposites))) (pop stack)
+                                              :else stack)
+                          ch-stack)))))))
+
+  (defn select-parent [ed]
+                      (when ed
+                        (when (or (not (::orig-pos @ed))
+                                  (editor/selection? ed))
+                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+                        (-> (paredit/ed->info ed)
+                            (paredit/select nil)
+                            (paredit/batched-edits))))
+
+
+
+  (defn move-loc [ed dir]
+    (-> ed (paredit/move-loc (:loc (paredit/ed->info ed)) dir)))
+
+  (defn select [{:keys [ed loc] :as orig} [start end]]
+    (update-in orig [:edits] conj
+               {:type :cursor
+                :from start
+                :to (editor/adjust-loc end 1)}))
+
+
+  (defn get-char [ed loc]
+      (editor/range ed (editor/adjust-loc loc -1) loc))
+
+  (defn word-boundary [ed loc]
+    (let [[c start] (paired-scan
+                     {:dir :left
+                      :ed ed
+                      :allow-end? true
+                      :loc (paredit/move-loc ed (editor/->cursor ed) :left)
+                      :for #"[\s\)\}\]\"\(\{\[(#_)]"
+                      :for-length 2})
+          start (paredit/move-loc ed start :right)
+          [c end] (if-not c
+                    [nil nil]
+                    (paired-scan {:dir :right
+                                  :ed ed
+                                  :allow-end? false
+                                  :loc start
+                                  :for #"[\s\)\}\]\"\(\{\[]"}))]
+      [start (paredit/move-loc ed end :left)]))
+
+  (cmd/command {:command :ewen.test-bounds
+                :desc "test bounds"
+                :exec #(prn (word-boundary (pool/last-active) (editor/->cursor (pool/last-active))))})
+
+  (defn select-at-point [ed]
+    (let [[at-point after] [(editor/get-char ed -1) (editor/get-char ed 1)]
+          loc (-> ed paredit/ed->info :loc)
+          left-loc (-> ed (move-loc :left))
+          ed-info (paredit/ed->info ed)
+          boundaries (match [at-point after]
+                            [")" _] (paredit/form-boundary ed left-loc nil)
+                            ["]" _] (paredit/form-boundary ed left-loc nil)
+                            ["}" _] (paredit/form-boundary ed left-loc nil)
+                            ["" _] nil
+                            [" " _] nil
+                            [_ ""] (word-boundary ed left-loc)
+                            [_ " "] (word-boundary ed left-loc)
+                            [_ ")"] (word-boundary ed left-loc)
+                            [_ "]"] (word-boundary ed left-loc)
+                            [_ "}"] (word-boundary ed left-loc)
+                            :else nil)
+          selection (if boundaries
+                      (select ed-info boundaries)
+                      ed-info)]
+      (paredit/batched-edits selection)))
+
+  (defn eval-at-point [ed]
+    (when (or (not (::orig-pos @ed))
+              (editor/selection? ed))
+      (object/merge! ed {::orig-pos (editor/->cursor ed)}))
+    (when (not (editor/selection? ed))
+      (select-at-point ed))
+    (when ed
+      (object/raise ed :eval)
+      (cmd/exec! :editor.selection.clear))
+    (when (::orig-pos @ed)
+      (editor/move-cursor ed (::orig-pos @ed))
+      (object/merge! ed {::orig-pos nil})))
+
+
+  (cmd/command {:command :ewen.select-at-point
+              :desc "select at point"
+              :exec #(select-at-point (pool/last-active))})
+
+  (cmd/command {:command :ewen.eval-at-point
+              :desc "eval at point"
+              :exec #(eval-at-point (pool/last-active))})
 
 
 
 
 (comment
 
-  ring-buffer
 
 
-  ;Tabs
-  (require '[cljs.core])
-
-  (cmd/command {:command :test-command
-                :desc "Test command"
-                :exec #(prn "g")})
-
-  (prn @lt.object/object-defs)
-
-  (prn @files/files-obj)
-
-  (keys @tabs/multi)
-  (keys @(first (:tabsets @tabs/multi)))
-  (keys @tabs/tabset)
-
-  (prn (first (:args @(second (second (:widgets @(second (first (first (:args @(second (second (:widgets @(:active-obj @(first (:tabsets @tabs/multi))))))))))))))))
-  (object/raise lt.objs.opener/opener :open! "/home/ewen/.emacs")
+(comment "Paried-scan -> Scan for regex??
+  negation -> Add a condition for the regex to scan. If the regex is found but the condition is wrong, then the regex is ignored.
+  allow-end? -> allow-end of line when scaning for regex?
+  allow-strings? -> Ignore the regex if it is in a allow-strings?
+  only-for? -> I think, same thing than \"strict mode\" when matching brackets, ie: a paren cannot end a braces for example.")
 
 
-  (:info @(first (:objs @(first (:tabsets @tabs/multi)))))
 
 
+
+  (cmd/command {:command :test-scan
+                :desc "test-scan"
+                :exec #(prn (word-boundary
+                             (pool/last-active)
+                             (editor/->cursor (pool/last-active))))})
+
+  (cmd/command {:command :test-chars
+                :desc "test-chars"
+                :exec #(prn [(editor/get-char (pool/last-active) -1)
+                             (editor/get-char (pool/last-active) 1)])})
 
 
 
@@ -49,98 +188,6 @@
 
 
 
-
-
-
-;Paredit
-(ns lt.plugins.paredit
-  (:require [lt.object :as object]
-            [lt.objs.editor :as editor]
-            [lt.objs.editor.pool :as pool]
-            [lt.objs.command :as cmd]
-            [lt.util.cljs :refer [str-contains?]]))
-
-(keys @(pool/last-active))
-
-
-(do (def ed (pool/last-active)) (def loc (:loc (ed->info ed))) nil)
-
-(:loc (ed->info ed))
-
-(paredit/form-boundary
- (:ed (paredit/ed->info (pool/last-active)))
- (:loc (paredit/ed->info (pool/last-active)))
- (when nil
-   (re-pattern (str "[\\" type "]"))))
-
-(:loc (ed->info ed))
-(:ed (ed->info ed))
-
-(cmd/command {:command :form-boundary
-              :desc "Form boundary (test)"
-              :exec (fn []
-                      (prn (form-boundary
-                           (:ed (ed->info (pool/last-active)))
-                           (:loc (ed->info (pool/last-active)))
-                           (when nil
-                             (re-pattern (str "[\\" type "]"))))))})
-
-
-(cmd/command {:command :set-cursor
-              :desc "Set cursor"
-              :exec (fn []
-                      (prn (paired-scan
-                           {:dir :left
-                            :ed ed
-                            :loc (move-loc ed (:loc (ed->info ed)) :left)
-                            :for form-start})))})
-
-
-(cmd/command {:command :paredit.select.parent
-              :desc "Paredit: Select expression2"
-              :exec (fn [type]
-                      (prn type)
-                      (when-let [ed (pool/last-active)]
-                        (when (or (not (::orig-pos @ed))
-                                  (editor/selection? ed))
-                          (object/merge! ed {::orig-pos (editor/->cursor ed)}))
-                        (-> (ed->info ed)
-                            (select type)
-                            (batched-edits)
-                            ))
-                      )})
-(paired-scan {:dir :left
-              :ed ed
-              :loc (move-loc ed loc :left)
-              :for form-start})
-
-(paired-scan {:dir :left
-              :ed (pool/last-active)
-              :loc (move-loc (pool/last-active) (:loc (ed->info (pool/last-active))) :left)
-              :for (or regex form-start)})
-
-(editor/->cursor ed)
-(editor/get-char ed -1)
-(editor/adjust-loc (editor/->cursor ed) 0)
-
-(scan {:dir :left
-       :ed ed
-       :loc (:loc (ed->info ed))
-       :regex #""})
-
-(let [matching {"(" ")>" ")" "(<" "[" "]>" "]" "[<" "{" "}>" "}" "{<"}]
-  (defn find-matching-bracket []
-    (let [max-scan-len 10000
-          ed (pool/last-active)
-          cur (-> ed ed->info :loc)
-          line (:line cur)
-          pos (- (:ch cur) 1)
-          match (and (>= pos 0)
-                     (get matching (editor/get-char ed -1)))
-          forward (when (not (nil? match))
-                    (= (.charAt match 1) ">"))
-          d (if forward 1 -1)
-          style (.getTokenTypeAt (:ed @ed) (js/CodeMirror.Pos. line (:ch cur)))])))
 
 (find-matching-bracket)
 
@@ -199,93 +246,6 @@
   (matching-brackets cm (editor/->cursor ed) false)
 
 
-  (defn select
-    "Return the action to be executed in order to select the positions
-    of an editor from start to end."
-    [[start end]]
-    (if (or (nil? start) (nil? end))
-      [] ;Nothing to be selected. No action
-      [{:type :cursor
-        :from start
-        :to end}]))
-
-  (select [{:line 191 :ch 14} {:line 177 ch :2}])
-
-
-  (defn select-at-point [{:keys [ed loc] :as orig}]
-    (let [[at-point after] [(editor/get-char ed -1) (editor/get-char ed 0)]
-          _ (prn [at-point after])
-          action (match [at-point after]
-                 [")" _] (->> (matching-brackets cm (editor/cursor ed) false) select)
-                 ["]" _] (->> (matching-brackets cm (editor/cursor ed) false) select)
-                 ["}" _] (->> (matching-brackets cm (editor/cursor ed) false) select)
-                 :else [])]
-      action))
-
-  )
-  (-> (paredit/ed->info ed) select-at-point)
-  (.log js/console (editor/cursor ed))
-(comment
-
-  (.log js/console (paredit/ed->info ed))
-  (editor/->cursor ed)
-
-  (cmd/command {:command :ewen.paredit.select.at-point
-                :desc "Ewen-Paredit: Select at point"
-                :exec (fn []
-                        (when-let [ed (pool/last-active)]
-                          (when (or (not (::orig-pos @ed))
-                                    (editor/selection? ed))
-                            (object/merge! ed {::orig-pos (editor/->cursor ed)}))
-                          (-> (paredit/ed->info ed)
-                              select-at-point
-                              (paredit/batched-edits))))})
-
-(defn scan [{:keys [dir ed loc regex match-length] :as opts}]
-  (let [search-range [(- (:line loc) 100) (+ (:line loc) 100)]
-        match-length (if (nil? match-length) 1 match-length)]
-    (loop [cur loc
-           line (editor/line ed (:line loc))
-           buff (ring-buffer match-length)]
-      (if (or (not cur)
-              (not line)
-              (not (paredit/within-range search-range cur)))
-        nil
-        (let [ch (get line (:ch cur))
-              buff (conj buff ch)
-              buff-str (->> buff reverse (reduce str))
-              next-loc (paredit/move-loc ed cur dir)
-              next-line (if (not= (:line cur) (:line next-loc))
-                          (editor/line ed (:line next-loc))
-                          line)]
-          (if (and buff-str (re-seq regex buff-str))
-            [buff-str cur]
-            (recur next-loc next-line buff)))))))
-
-  (reduce str (-> (ring-buffer 3) (conj 1) (conj 2) (conj 3) (conj 4)))
-  (reverse (-> (ring-buffer 3) (conj 1) (conj 2) (conj 3)))
-
-
-
-(defn first-whitespace [opts]
-  (paredit/scan (assoc opts :regex #" ")))
-
-(defn first-ignore [opts]
-  (paredit/scan (assoc opts :regex #"#_")))
-
-(first-whitespace {:ed (pool/last-active)
-                           :loc (:loc (paredit/ed->info (pool/last-active)))
-                           :dir :left})
-
-(scan {:ed (pool/last-active)
-       :loc (:loc (paredit/ed->info (pool/last-active)))
-       :dir :left
-       :regex #"#_"
-       :match-length 2})
-
-
-(:ed @(pool/last-active))
-(:ed @(:ed (paredit/ed->info (pool/last-active))))
 
 
 
@@ -345,4 +305,3 @@
 
 
 )
-
