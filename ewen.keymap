@@ -17,6 +17,10 @@
 
               ;Go to start/end of line
               "ctrl-a" [:editor.line-start]
-              "ctrl-e" [:editor.line-end]}}
- :editor.cljs {"ctrl-enter" [:ewen.eval-at-point]
-               "ctrl-alt-space" [:ewen.select-next]}}
+              "ctrl-e" [:editor.line-end]}
+     :editor.cljs {"ctrl-enter" [:ewen.eval-at-point]
+                   "ctrl-alt-space" [:ewen.select-next]
+                   "alt-s" [:paredit.unwrap.parent]
+                   "ctrl-alt-a" [:ewen.move-top]
+                   "ctrl-alt-f" [:ewen.move-forward]
+                   "ctrl-alt-b" [:ewen.move-backward]}}}
